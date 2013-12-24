@@ -1,0 +1,8 @@
+name = Lightbox Album
+description = User lightbox managing photos 
+core = 7.x
+package = gophotostock modules
+configure = admin/config/lightbox_album
+files[] = lightbox_album.install
+files[] = lightbox_album.module
+scripts[] = ajax_display.js
