@@ -1,0 +1,121 @@
+<?php 
+
+/**
+ * Implements hook_schema().
+ */
+function users_credits_schema() {
+  $schema['users_credits'] = array(
+    'description' => t('Table data for user buyed credits.'),
+    
+    'fields' => array(      
+      'id' => array(
+        'description' => t('ID of buyed credits.'),
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+ 
+      'uid' => array(
+        'description' => t('User ID into table {users}.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      
+      'credits_amount' => array(
+        'description' => t('User buyed credits amount.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      
+      'buy_time' => array(
+        'description' => t('The Unix timestamp when user buyed credits.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+            
+    ),
+    
+    'indexes' => array(
+      'uid' => array('uid'),
+    ),
+    
+    'foreign keys' => array(
+      'uid' => array(
+        'table' => 'users',
+        'columns' => array('users' => 'uid'),
+      ),
+    ),
+    
+    'primary key' => array('id'),
+  );
+  
+  $schema['users_credits_download'] = array(
+    'description' => t('Table data users download photos'),
+    
+    'fields' => array(      
+      'id' => array(
+        'description' => t('ID of download'),
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+ 
+      'uid' => array(
+        'description' => t('User ID into table {users}'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      
+      'photo_id' => array(
+        'description' => t('Downloaded photo id'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      
+      'download_time' => array(
+        'description' => t('The Unix timestamp when user download photo.'),
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      
+      'license' => array (
+        'description' => t('Accepted license for downloaded photo.'),
+        'type' => 'varchar',
+        'length' => 20,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      
+    ),
+    
+    'indexes' => array(
+      'uid' => array('uid'),
+      'photo_id' => array('photo_id'),
+    ),
+    
+    'foreign keys' => array(
+      'uid' => array(
+        'table' => 'users',
+        'columns' => array('users' => 'uid'),
+      ),
+      'photo_id' => array (
+        'table' => 'node',
+        'columns' => array('node' => 'id'),
+      ),
+    ),
+    
+    'primary key' => array('id'),
+  );
+  
+  return $schema;
+}

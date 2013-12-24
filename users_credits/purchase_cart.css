@@ -1,0 +1,28 @@
+/* Shopping cart display 
+   views-view-gophotostock-credit-purchase.tpl.php
+*/
+.commerce-line-item-views-form table {
+	width: 600px;
+}
+
+.view-content table {
+	width: 600px;
+}
+
+.commerce-line-item-views-form thead {
+	font-weight: bold;
+}
+
+.view-content thead {
+	font-weight: bold;
+}
+
+.view-gophotostock-credit-purchase {
+	background-color: white;
+	padding: 10px;
+}
+
+.view-clone-of-shopping-cart-summary {
+	background-color: white;
+	padding: 10px;
+}

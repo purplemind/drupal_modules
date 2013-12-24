@@ -1,0 +1,693 @@
+<?php 
+
+//TODO: onUserDelete
+
+/**
+ * User allowed idle time
+ */
+define('ALLOWED_IDLE', 31536000); //five years. REVISION DATE: 7.02.2013.
+
+/**
+ * Credits for Standard licence
+ */
+define('STANDARD_LICENCE_VALUE', 1);
+
+/**
+ * Credits for Extended licence
+ */
+define('EXTENDED_LICENCE_VALUE', 75);
+
+/**
+ * Original image file directory
+ */
+define('IMAGE_DIR', 'sites/default/files/temp_dwnl/');
+
+/**
+ * Add new user who buyed credits. DO NOT USE MANUALLY, INSTEAD USE users_credits_buy_credits
+ */
+function users_credits_add_new_user($uid, $credits) {
+  if (!empty($uid) && !empty($credits)) {
+    $qry = db_insert('users_credits');
+    $qry->fields(array(
+        'uid' => $uid,
+        'credits_amount' => $credits,
+        'buy_time' => time(),
+    ))->execute(); 
+  }
+}
+
+/**
+ * Add amount of credits to existing one. DO NOT USE MANUALLY, INSTEAD USE users_credits_buy_credits
+ */
+function users_credits_add_to_existing($uid, $credits) {
+  $qry = db_update('users_credits');
+  $qry->expression('credits_amount', 'credits_amount + :credits_amount', array(':credits_amount' => $credits));
+  $qry->fields(array(
+    'buy_time' => time(),
+  ));
+  $qry->condition('uid', $uid, '=');
+  $qry->execute();
+}
+
+/**
+ * Check for user presents into {users_credits}
+ */
+function users_credits_user_exists($uid) {
+  $qry = db_select('users_credits', 'uc');
+  $qry->fields('uc', array('uid'));
+  $qry->condition('uc.uid', $uid, '=');
+  $res = $qry->execute();
+  if ( $res->rowCount() > 0 ) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/**
+ * Add amount of credits to user (checking if user exists in table {users_credits}
+ */
+function users_credits_buy_credits($product_id, $uid) {
+  if ( isset($product_id) && !empty($product_id) ) {
+    $credits = users_credits_get_credit_amount($product_id);
+  }
+  if ( $credits > 0 ) {
+    if ( users_credits_user_exists($uid) ) {
+      users_credits_add_to_existing($uid, $credits);
+    }
+    else {
+      users_credits_add_new_user($uid, $credits);
+    }
+  }
+}
+
+/**
+ * Get credit amount based on product id
+ */
+function users_credits_get_credit_amount($product_id) {
+  if ( isset($product_id) && !empty($product_id) ) {
+    $qry = db_select(' field_data_field_broj_kredita', 'fdfbk');
+    $qry->fields('fdfbk', array('field_broj_kredita_value'));
+    $qry->condition('fdfbk.entity_id', $product_id, '=');
+    $qry->condition('fdfbk.bundle', 'credits_product_type', '=');
+    $res = $qry->execute()->fetchAssoc();
+    return $res['field_broj_kredita_value'];
+  }
+  return 0;
+}
+
+
+/**
+ * Check user spending credits idle.
+ * Return: true if idle > ALLOWED_IDLE (5 years, revision:7.02.2013.)
+ */
+function users_credits_long_idle($uid) {
+  if ( $uid && users_credits_user_exists($uid) ) {
+    $qry = db_select('users_credits', 'uc');
+    $qry->fields('uc', array('buy_time'));
+    $qry->condition('uid', $uid, '=');
+    $res = $qry->execute()->fetchAssoc();
+    if ( (time() - $res['buy_time']) > ALLOWED_IDLE ) {
+      $qry = db_update('users_credits');
+      $qry->fields(array('credits_amount' => 0,));
+      $qry->condition('uid', $uid, '=');
+      $qry->execute();
+    }
+  }
+  return FALSE; //if user don't exists
+}
+
+/**
+ * Get current user credits.
+ */
+function users_credits_get_credits($uid) {
+  if ( $uid && users_credits_user_exists($uid) ) {
+    $qry = db_select('users_credits', 'uc');
+    $qry->fields('uc', array('credits_amount'));
+    $qry->condition('uc.uid', $uid, '=');
+    $res = $qry->execute()->fetchAssoc();
+    return $res['credits_amount'];
+  }
+  return 0;
+}
+
+/**
+ * Charge user when downloaded photo
+ */
+function users_credits_charge_user($uid, $credits) {
+  
+  $qry = db_update('users_credits');
+  $qry->expression('credits_amount', 'credits_amount - :credits_amount', array(':credits_amount' => $credits));
+  $qry->fields(array(
+    'buy_time' => time(),
+  ));
+  $qry->condition('uid', $uid, '=');
+  $qry->execute();
+}
+
+/**
+ * Implements hook_permission().
+ */
+function users_credits_permission() {
+  return array(
+    'download_photo access' => array(
+      'title' => t('Access to "download photo" links'),
+      'description' => t('Access to download links for specific photo'),
+    ),
+    'download_photo licence access' => array(
+      'title' => t('Access to the page LICENCE download photo'),
+      'description' => t('Access to the page LICENCE download photo'),
+    ),
+  );
+}
+
+/**
+ * Provide two links for downloading photo
+ */
+function users_credits_menu() {
+  $items = array();
+  
+  //link for query Standard\Extended Licence 
+  $items['download/%/%/%'] = array(
+    'title' => 'Download photo with Standard or Extended Licence',
+    'type' => MENU_CALLBACK,
+    'page callback' => 'users_credits_download_ajax',
+    'page arguments' => array(1, 2, 3), //1-nojs or ajax, 2-standard\extended, 3-photo id
+    'access arguments' => array('download_photo access'),
+  );
+    
+  //link to the page for downloading photo with standard licence
+  $items['standard_licence/%'] = array(
+    'title' => 'Download photo with Standard Licence',
+    'type' => MENU_CALLBACK,
+    'page callback' => 'users_credits_display_standard_licence_download',
+    'page arguments' => array(1), //1-photo_id
+    'access arguments' => array('download_photo licence access'),
+  );
+
+  $items['extended_licence/%'] = array(
+    'title' => 'Download photo with Extended Licence',
+    'type' => MENU_CALLBACK,
+    'page callback' => 'users_credits_display_extended_licence_download',
+    'page arguments' => array(1), //1-photo_id
+    'access arguments' => array('download_photo licence access'),
+  );
+  
+  return $items;
+}
+
+/**
+ * Callback download photo with Standard Licence
+ */
+function users_credits_download_ajax($ajax, $licence, $photo_id) {
+  if ( $ajax=='ajax' ) {
+    $commands = array();
+    $commands[] = ajax_command_replace('#download-box', '<div id="download-box">' .drupal_render(drupal_get_form('users_credits_sure_download_form', $licence, $photo_id)));//PROBA! Download photo id = ' .$photo_id .'</div>');
+    $commands[] = ajax_command_invoke(NULL, 'ajax_display_download_box');
+    ajax_deliver(array('#type' => 'ajax', '#commands' => $commands));
+  }
+  else {
+    drupal_goto($licence .'_licence/' .$photo_id);
+  }
+}
+
+/**
+ * Form are you sure to download...
+ */
+function users_credits_sure_download_form($form, &$form_state, $licence, $photo_id) {
+  global $user;
+  
+  $credits = users_credits_get_credits($user->uid);
+  
+  if ( $licence=='standard') {
+    $cost = STANDARD_LICENCE_VALUE;
+  } else {
+    $cost = EXTENDED_LICENCE_VALUE;
+  }
+    
+  $form = array();
+  
+  $form = array(
+    '#prefix' => '<div id="form-sure-download"><div id="close" style="text-align: right; cursor: hand; cursor: pointer;">Close[X]</div>',
+    '#suffix'=> '</div><div id="msg"></div>',
+  );
+  
+  if ($user->uid) {
+    $form['info_credits'] = array(
+      '#markup' => '<span style="display: block;">You have: ' .$credits .' credits.</span>',
+    );
+    
+    $form['info_cost'] = array(
+      '#markup' => '<span style="display: block;">Photo costs: ' .$cost .' credit(s).</span>',
+    );
+    
+    $form['photo_id'] = array(
+      '#type' => 'hidden',
+      '#value' => $photo_id,
+    );
+    
+    if ( $credits >= $cost ) {
+      $form['sure_text'] = array(
+        '#markup' => '<span style="display: block;">Proceed to download the photo. You will be charged after you accept license.</span>',
+      );
+      
+    if ( users_credits_user_already_downloaded($user->uid, $photo_id, $licence) ) {
+      $form['sure_text'] = array(
+        '#markup' => '<span style="display: block;">You already downloaded this photo!</span>',
+      );
+    }
+    
+    $form['sure_cancel'] = array(
+      '#type' => 'button',
+      '#value' => t('Proceed'),
+      //'#href' => ($licence == 'standard') ? 'standard_licence/' .$photo_id : 'extended_licence/' .$photo_id,
+    );
+    
+    $form['#action'] = ($licence == 'standard') ? (base_path() .'standard_licence/' .$photo_id) : (base_path() .'extended_licence/' .$photo_id);
+    
+    }
+    else {
+      $form['sure_text'] = array(
+        '#markup' => '<span style="display: block;">You have NO enough credits to download this photo!</span>',
+      );
+    }
+  }
+  else {
+    $form['form']['login'] = array(
+      '#markup' => '<p>Please Login...</p>To download photos you must first register or login. Registration is Free!',
+    );
+  }
+   
+  return $form;
+}
+
+/**
+ * Submit form users_credits_sure_download_form
+ */
+function users_credits_sure_download_form_submit($form, &$form_state) {
+  /*
+  //update-ovati kredite
+  global $user;
+  $uid = $user->uid;
+  if (!users_credits_user_already_downloaded($uid, $form_state['values']['photo_id']) {
+    $users_credits_charge_user($uid, 1);
+    //Zabeleziti koju fotku je skinuo. Pokusati preko order!!!
+    $order = commerce_order_new($uid, 'completed');
+    //Load product which want to add in new order:
+    $product = commerce_product_load($form_state['values']['photo_id']);
+    $line_item = commerce_product_line_item_new($product, 1, $order->order_id, array());
+    commerce_line_item_save($line_item);
+    //Wrap up the order:
+    $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+    $order_wrapper->commerce_line_items[] = $line_item;
+    //Save the order to database:
+    commerce_order_save($order);
+  }
+  */
+  //drupal_set_message('Fotografija je kao preuzeta!', 'status');
+  //drupal_goto('standard_licence/' .$form_state['values']['photo_id']);
+}
+
+/**
+ * Submit standard lincence get link form.
+ */
+function users_credits_sure_standard_download($form, $form_state) {
+  drupal_goto('standard_licence/' .$form_state['values']['photo_id']);
+}
+
+/**
+ * Submit standard lincence get link form.
+ */
+function users_credits_sure_extended_download($form, $form_state) {
+  drupal_goto('extended_licence/' .$form_state['values']['photo_id']);
+}
+
+/**
+ * Save user's download info to database.
+ */
+function users_credits_save_download($uid, $photo_id, $licence) {
+  if ( $uid && !empty($uid) ) {
+    $qry = db_insert('users_credits_download');
+    $qry->fields(array(
+      'uid' => $uid,
+      'photo_id' => $photo_id,
+      'download_time' => time(),
+      'license' => $licence,
+    ))->execute();
+  }
+}
+
+/**
+ * Get all user's downloaded photos.
+ * TODO: Dodati grupisanje po licenci ili vec nekako resiti razlicite licence za istu fotografiju!
+ */
+function users_credits_get_all_downloaded() {
+  //get 'title', 'nid'
+  global $user;
+  if ($user->uid) {
+    $qry = db_select('users_credits_download', 'ucd');
+    $qry->join('node', 'n', 'ucd.photo_id=n.nid');
+    $qry->condition('ucd.uid', $user->uid, '=');
+    $qry->fields('n', array('title', 'nid'));
+    return $qry->execute();
+  }
+  else {
+    drupal_set_message(t('You must first login.'), 'warning');
+  }
+}
+
+/**
+ * Check if user already downloaded specified photo.
+ */
+function users_credits_user_already_downloaded($uid, $photo_id, $licence) {
+  if ( $uid && $photo_id) {
+    $qry = db_select('users_credits_download', 'ucd');
+    $qry->fields('ucd', array('id'));
+    $qry->condition('ucd.photo_id', $photo_id, '=');
+    $qry->condition('ucd.license', $licence, '=');
+    $res = $qry->execute();
+    if ( $res->rowCount() > 0 ) {
+      return TRUE;
+    }
+    return FALSE;
+  }
+}
+
+/**
+ * Get photo fid for specified photo id(node->nid)
+ */
+function users_credits_get_photo_uri($photo_id) {
+  $qry = db_select('field_data_field_slika', 'fdfs');
+  $qry->join('file_managed', 'fm', 'fdfs.field_slika_fid=fm.fid');
+  $qry->fields('fm', array('uri'));
+  $qry->condition('fdfs.entity_id', $photo_id, '=');
+  $qry->condition('fdfs.bundle', 'display_my_product', '=');
+  $res = $qry->execute()->fetchAssoc();
+  return $res['uri'];  
+}
+
+/**
+ * Calling theme for licence.tpl.php for standard licence.
+ */
+function users_credits_display_standard_licence_download($photo_id) {
+  //create themable image to display within template licence.tpl.php
+  $photo_uri = users_credits_get_photo_uri($photo_id);
+  $display_node = node_load($photo_id);
+  return theme('users_credits_licence_template', array(
+                  'photo_id' => $photo_id,
+                  'photo_uri' => $photo_uri,
+                  'licence' => 'standard',
+                  'title' => $display_node->title,
+                  )
+              );
+}
+
+/**
+ * Calling theme for licence.tpl.php for extended licence.
+ */
+function users_credits_display_extended_licence_download($photo_id) {
+  //prosledjuje template-u licence.tpl.php cetiri promenljive:
+  $photo_uri = users_credits_get_photo_uri($photo_id);
+  $display_node = node_load($photo_id);
+  return theme('users_credits_licence_template', array(
+                  'photo_id' => $photo_id,
+                  'photo_uri' => $photo_uri,
+                  'licence' => 'extended',
+                  'title' => $display_node->title,
+                  )
+              );
+}
+
+/**
+ * Provide licence.tpl.php with variuos variables
+ */
+function users_credits_theme() {
+  $themes = array (
+    'users_credits_licence_template' => array(
+      'template' => 'licence', // template file licence.tpl.php
+      'variables' => array('photo_id' => null, 'photo_uri' => null, 'licence' => null, 'title' => null),
+    ),
+  );
+  return $themes;
+}
+
+/**
+ * Accept licence
+ */
+function users_credits_accept_licence_form($form, &$form_state, $title, $uri, $licence, $photo_id) {
+  global $user;  
+  
+  $form = array(
+    '#prefix' => '<div id="accept_licence">',
+    '#suffix' => '</div>',
+  );
+  
+  $form['#action'] = url($licence .'_licence/' .$photo_id); //url()
+  
+  $form['title'] = array (
+    '#type' => 'hidden',
+    '#value' => $title, 
+  ); 
+  
+  $form['uri'] = array (
+    '#type' => 'hidden',
+    '#value' => $uri,
+  );
+
+  $form['photo_id'] = array (
+    '#type' => 'hidden',
+    '#value' => $photo_id,
+  );
+  
+  if ( users_credits_user_already_downloaded($user->uid, $photo_id, $licence) ) {
+    $form['info1'] = array(
+      '#markup' => 'You already downloaded the photo. Get photo for free!<br />',
+    );
+    $already_downloaded = true;
+  } else {
+    $form['info1'] = array(
+      '#markup' => 'Please accept license below to get photo.<br />',
+    );
+    $already_downloaded = false;
+  }
+  
+  $form['info2'] = array(
+    '#markup' => 'Possible problem: if your downloading process breaks for some reason, repeat process. You will not be charged!',
+  );
+  
+  $form['agree'] = array (
+    '#type' => 'checkbox',
+    '#title' => t('I agree to the GoPhotoStock ' .$licence .' lincese as stated in our Terms of Service.'),
+    '#default_value' => users_credits_user_already_downloaded($user->uid, $photo_id, $licence),
+    '#ajax' => array(
+      'callback' => 'users_credits_accept_show_btn_ajax',
+      'wrapper' => 'get_photo_btn',
+      'method' => 'replace',
+      'efect' => 'fade',
+    ),
+  );
+  
+  $form['btn_get_link'] = array(
+    '#prefix' => '<div id="get_photo_btn">',
+    '#suffix' => '</div>',
+    '#type' => 'submit',
+    '#value' => t('Get the photo'),
+    '#disabled' => ( isset($form_state['values']['agree']) ) ? !$form_state['values']['agree'] : (!$already_downloaded),
+    '#submit' => ($licence=='standard') ? array('users_credits_accept_standard_licence_form_submit') : array('users_credits_accept_extended_licence_form'),
+  );
+  
+  switch ( $licence ) {
+    case 'standard':
+      $form['#validate'][] = 'users_credits_accept_standard_licence_form_validate';
+      break;
+    case 'extended':
+      $form['#validate'][] = 'users_credits_accept_extended_licence_form_validate';
+      break;
+  }
+  
+  return $form;
+}
+
+/**
+ * Aajx checkbox "agree" callback  
+ */
+function users_credits_accept_show_btn_ajax($form) {
+  return $form['btn_get_link'];
+}
+
+/**
+ * Validate users_credits_accept_licence_form for Standard license
+ */
+function users_credits_accept_standard_licence_form_validate($form, $form_state) {
+  global $user;
+  $uid = $user->uid;
+  if ( !users_credits_user_already_downloaded($uid, $form_state['values']['photo_id'], 'standard') ) {
+    if ( $form_state['values']['agree'] == 0 ) {
+      form_set_error('agree', t('You must accept license!'));
+      return false;
+    }
+    if ( $uid && $licence=='standard' && users_credits_get_credits($uid)<STANDARD_LICENCE_VALUE ) {
+      form_set_error('btn_get_link', t('You don\'t have enough credits! Buy some.'));
+      return false;
+    }
+  } 
+  return true;
+}
+
+/**
+ * Validate users_credits_accept_licence_form for Extended license
+ */
+function users_credits_accept_extended_licence_form_validate($form, $form_state) {
+  global $user;
+  $uid = $user->uid;
+  if ( !users_credits_user_already_downloaded($uid, $form_state['values']['photo_id'], 'extended') ) {
+    if ( $form_state['values']['agree'] == 0 ) {
+      form_set_error('agree', t('You must accept license!'));
+      return false;
+    }
+    if ( $uid && $licence=='standard' && users_credits_get_credits($uid)<EXTENDED_LICENCE_VALUE ) {
+      form_set_error('btn_get_link', t('You don\'t have enough credits! Buy some.'));
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Submit users_credits_accept_licence_form Standard license
+ */
+function users_credits_accept_standard_licence_form_submit($form, $form_state) {
+  //sacuvaj u bazu!
+  global $user;
+  $uid = $user->uid;
+  if ( !users_credits_user_already_downloaded($uid, $form_state['values']['photo_id'], 'standard') ) {
+    users_credits_charge_user($uid, STANDARD_LICENCE_VALUE);
+    users_credits_save_download($uid, $form_state['values']['photo_id'], 'standard');
+  }
+  $dir = IMAGE_DIR .$uid;
+  mkdir($dir);
+  if ( copy(file_create_url($form_state['values']['uri']), $dir .'/' .$form_state['values']['title'] .'.jpg') ) {
+    $filename = str_replace(' ', '_', $form_state['values']['title'] .'.jpg');
+    // Version 2:
+    ini_set('error_reporting', E_ALL & ~ E_NOTICE);
+    ini_set('zlib.output_compression', 'Off');
+    $file_size  = filesize($dir .'/' .$form_state['values']['title'] .'.jpg');
+    $file = fopen($dir .'/' .$form_state['values']['title'] .'.jpg', "rb");
+    if ($file)
+    {
+      // set the headers, prevent caching
+      header("Pragma: public");
+      header("Expires: -1");
+      header("Cache-Control: public, must-revalidate, post-check=0, pre-check=0");
+      header("Content-Disposition: attachment; filename=\"$filename\"");
+      header('Content-Type:  application/jpeg');
+      header('Content-Range: bytes');
+      header('Content-Length: ' .$file_size);
+      ob_clean();
+	  while(!feof($file)) {
+		print(fread($file, 1024*8));
+		ob_flush();
+		flush();
+		//if (connection_status()!=0) {
+		//  fclose($file);
+		//}
+	  }			 
+	  // file save was a success
+	  fclose($file);
+      unlink($dir .'/' .$form_state['values']['title'] .'.jpg');
+      rmdir($dir);
+      drupal_set_message(t('You download the photo succesfully!'), 'status');
+      exit;
+      //drupal_goto('node/' .$form_state['values']['photo_id']);
+	}
+    //--- End Version 3
+    /* Version 1:
+    header('Content-Description: File Transfer');
+    header('Content-type:  application/jpeg');
+    header('Content-Length: ' .filesize($dir .'/' .$form_state['values']['title'] .'.jpg'));
+    header('Content-Disposition: attachment; filename=' .$filename);
+    header('Content-Transfer-Encoding: binary');
+    ob_clean();
+    flush();
+    readfile($dir .'/' .$form_state['values']['title'] .'.jpg');
+    //exit;
+    //ignore_user_abort(true);
+    //if (connection_aborted()) {
+    unlink($dir .'/' .$form_state['values']['title'] .'.jpg');
+    rmdir($dir);
+    //}
+    drupal_set_message(t('You download the photo succesfully!'), 'status');
+    exit;
+    --- End Version 1. */
+  }
+}
+
+/**
+ * Submit users_credits_accept_licence_form Extended license
+ */
+function users_credits_accept_extended_licence_form($form, $form_state) {
+  global $user;
+  $uid = $user->uid;
+  if ( !users_credits_user_already_downloaded($uid, $form_state['values']['photo_id'], 'extended') ) {
+    users_credits_charge_user($uid, EXTENDED_LICENCE_VALUE);
+    users_credits_save_download($uid, $form_state['values']['photo_id'], 'extended');
+  }
+  $dir = IMAGE_DIR .$uid;
+  mkdir($dir);
+  if ( copy(file_create_url($form_state['values']['uri']), $dir .'/' .$form_state['values']['title'] .'.jpg') ) {
+    $filename = str_replace(' ', '_', $form_state['values']['title'] .'.jpg');
+    // Version 2:
+    ini_set('error_reporting', E_ALL & ~ E_NOTICE);
+    ini_set('zlib.output_compression', 'Off');
+    $file_size  = filesize($dir .'/' .$form_state['values']['title'] .'.jpg');
+    $file = fopen($dir .'/' .$form_state['values']['title'] .'.jpg', "rb");
+    if ($file)
+    {
+      // set the headers, prevent caching
+      header("Pragma: public");
+      header("Expires: -1");
+      header("Cache-Control: public, must-revalidate, post-check=0, pre-check=0");
+      header("Content-Disposition: attachment; filename=\"$filename\"");
+      header('Content-Type:  application/jpeg');
+      header('Content-Range: bytes');
+      header('Content-Length: ' .$file_size);
+      ob_clean();
+	  while(!feof($file)) {
+		print(fread($file, 1024*8));
+		ob_flush();
+		flush();
+		//if (connection_status()!=0) {
+		//  fclose($file);
+		//}
+	  }			 
+	  // file save was a success
+	  fclose($file);
+      unlink($dir .'/' .$form_state['values']['title'] .'.jpg');
+      rmdir($dir);
+      drupal_set_message(t('You download the photo succesfully!'), 'status');
+      exit;
+      //drupal_goto('node/' .$form_state['values']['photo_id']);
+    }
+    /*  Version 1:
+    header('Content-Description: File Transfer');
+    header('Content-Type:  application/jpeg');
+    header('Content-Length: ' .filesize($dir .'/' .$form_state['values']['title'] .'.jpg'));
+    header('Content-Disposition: attachment; filename=' .$filename); //force download
+    //----- IE6
+    header("Pragma: public");
+    header("Cache-Control: must-revalidate, post-check=0, pre-check=0");
+    //---- /IE6
+    header('Content-Transfer-Encoding: binary');
+    ob_clean();
+    flush();
+    readfile($dir .'/' .$form_state['values']['title'] .'.jpg');
+    //exit;
+    //ignore_user_abort(true);
+    //if (connection_aborted()) {
+    unlink($dir .'/' .$form_state['values']['title'] .'.jpg');
+    rmdir($dir);
+    //}
+    drupal_set_message(t('You download the photo succesfully!'), 'status');
+    exit;
+    */
+  }
+}

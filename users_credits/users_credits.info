@@ -1,0 +1,7 @@
+name = Users Credits
+description = User's credits, downloads... info  
+core = 7.x
+package = gophotostock modules
+files[] = users_credits.install
+files[] = users_credits.module
+scripts[] = ajax_credits.js
