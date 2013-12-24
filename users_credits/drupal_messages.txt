@@ -1,0 +1,8 @@
+Array
+(
+    [status] => Array
+        (
+            [0] => Fotografija je kao preuzeta!
+        )
+
+)
