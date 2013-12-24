@@ -1,0 +1,952 @@
+<?php 
+
+//TODO: Are you sure lista?!
+
+// "#proba" div tag is provide by "field--field_slika.tpl.php" template
+// This template styling image field within product(s) view! 
+
+// Node type to use for lightbox -> variable_set('lightbox_node_type', '').
+
+/**
+ * Node type saving photo into lightbox! 
+ */
+define ('PHOTO_NODE_TYPE', 'photo');
+
+/**
+ * Lightbox node type
+ */
+define ('LIGHTBOX_NODE_TYPE', 'lightbox_type');
+
+/**
+ * Implements hook_permission().
+ */
+function lightbox_album_permission() {
+   return array(
+       'lightbox_album access' => array(
+           'title' => t('Access to lightbox album'), 
+           'description' => t('Manipulate own lightbox albums'),
+       ),
+       'admin lightbox_album' => array (
+           'title' => t('Administer lightbox album'),
+           'description' => t('Set lightbox album appearing node types'),
+       ),
+       'lightbox_page_link access' => array(
+         'title' => t('Access to My Lightbox link in Main Menu'),
+         'description' => t('Don\'t allow anonymous user to see My Lightbox link.'),
+       ),
+  );
+}
+
+/**
+ * Configuration form for lightbox album node type
+ */
+function lightbox_album_settings_form($form, &$form_state) {
+   
+  $node_types = node_type_get_types();
+  
+  $options = array();
+  foreach($node_types as $node_type) {
+    $options[] = $node_type->type;
+  }
+  
+  $form['lightbox_node_type'] = array(
+        '#type' => 'radios',
+        '#title' => t('Lightbox node type'),
+        '#default_value' => variable_get('lightbox_node_type', 0), //isset($node->active) ? $node->active : 1,
+        '#options' => $options,
+        '#description' => t('Select node type for display user lightbox list.'),
+  );
+
+  return system_settings_form($form);
+}
+
+/**
+ * Implements hook_menu().
+ */
+function lightbox_album_menu() {
+  $items = array();
+
+  //configuring lightbox node type
+  $items['admin/config/lightbox_album'] = array(
+    'title' => 'Lightbox Set Appearing Node Types',
+    'type' => MENU_NORMAL_ITEM,
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('lightbox_album_settings_form'),
+    'access arguments' => array('admin lightbox_album'), 
+  );
+  
+  //add image to selected lightbox. This links are in #lightbox-display-all
+  $items['lightbox-add/%/%/%'] = array(  //args[0] - nojs/ajax, args[1] - lightbox_id, args[2]-product id
+    'title' => 'Add Image To Lightbox',
+    'type' => MENU_CALLBACK,
+    'page callback' => 'lightbox_album_save_image_callback',
+    'page arguments' => array(1, 2, 3),
+    'access arguments' => array('lightbox_album access'),
+  );
+  
+  //display form
+  $items['lightbox-add-image/%/%'] = array(
+    'title' => 'Add Image To Lightbox',
+    'type' => MENU_CALLBACK,
+    'page callback' => 'drupal_get_form_callback',
+    'page arguments' => array(1, 2),
+    'access arguments' => array('lightbox_album access'),
+  );
+  
+  //display all lightbox for current user (within a block)
+  $items['lightboxes/%'] = array(
+    'title' => 'My Lightboxes',
+    'type' => MENU_CALLBACK,
+    'page callback' => 'lightbox_album_display_all_lightbox_callback',
+    'page arguments' => array(1),
+    'access arguments' => array('lightbox_album access'),
+  );
+  
+  //display all lightboxes for current user within a page
+  $items['lightboxes_page'] = array(
+    'title' => 'My Lightboxes',
+    'type' => MENU_CALLBACK,
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('lightbox_album_delete_form'),
+    'access arguments' => array('lightbox_page_link access'),
+  );
+  
+  //display all photos for specified lightbox
+  //params: 1-lightbox nid, 2-lightbox title 
+  $items['lightbox/%/%/photos'] = array(
+    'type' => MENU_CALLBACK,
+    'page callback' => 'lightbox_album_display_all_photo_callback',
+    'page arguments' => array(1, 2),
+    'access arguments' => array('lightbox_album access'),
+  );
+  
+  //link for cancel button within "lightbox_album_add_image_form"
+  //params: 1-nojs or ajax
+  $items['lightbox-cancel-add-photo/%'] = array (
+    'type' => MENU_CALLBACK,
+    'page callback' => 'lightbox_album_add_image_cancel_callback',
+    'page arguments' => array(1),
+    'access arguments' => array('lightbox_album access'),
+  );
+  
+  return $items;
+}
+
+
+/**
+ * Callback ajax displaying lightbox main manu links: new and delete
+ */
+/*
+function lightbox_album_ajax_add_image_callback($ajax) {
+
+  if ($ajax == 'ajax' && user_access('lightbox_album access')) {
+    $commands = array();
+    $commands[] = ajax_command_replace('#lightbox-add-image-form', "<div id='lightbox-add-image-form'>" . drupal_render(drupal_get_form('lightbox_album_add_image_form')) . "</div>");
+    //radi kao return. vraca vrednost stranici sa koje je pozvan callback!
+    ajax_deliver(array('#type' => 'ajax', '#commands' => $commands));
+  }
+  elseif ( user_access('lightbox access') ) {
+    return array(
+        '#markup' => drupal_render(drupal_get_form('lightbox_album_add_image_form')),
+    );
+  }
+  else {
+    drupal_set_message(t('You can not access to lightbox. Please, register or login.'), 'warning');
+  }
+}
+*/
+
+/**
+ * Return form for creating new lightbox album.
+ * $args is array of variables containing additional infos for form.
+ * $args['pid'] - "product_id"
+ */
+function lightbox_album_add_image_form($form, &$form_state, $args=null) {
+  global $user;
+  if (!empty($args['pid'])) {
+    $pid = $args['pid'];
+  }
+  else {
+    $pid = '';
+  }
+  
+  $form['form'] = array (
+    '#prefix' => '<div id="lightbox-add-image-form" style="text-align: left"><div id="close" style="text-align: right; cursor: hand; cursor: pointer;">Close[X]</div>',
+    '#suffix' => '</div>',
+  );
+  
+  //if (user_access('lightbox_album access')) {
+  if ($user->uid) {
+  
+  $form['form']['all-lightboxes'] = lightbox_album_lightboxes($pid);
+  
+  $form['form']['pid'] = array(
+      '#type' => 'hidden',
+      '#value' => $pid,
+  );
+  
+  $form['form']['lightbox-new']['textfield'] = array (
+      '#type' => 'textfield',
+      '#title' => t('Lightbox album name'),
+      '#size' => 40,
+      '#maxlength' => 35,
+      '#required' => TRUE,
+      '#description' => t('Please insert lightbox album name'),
+  );
+
+  $form['form']['lightbox-new']['submit'] = array(
+      '#type' => 'submit',
+      '#value' => t('Save'),
+      '#id' => 'lightbox-add-image-submit',
+      '#ajax' => array(
+          'callback' => 'lightbox_album_add_image_ajax_submit',
+          'wrapper' => 'lightbox-add-image-form',
+          'efect' => 'fade',
+      ),
+  );
+  
+  $form['form']['lightbox-new']['cancel'] = array (
+    '#type' => 'link',
+    '#title' => 'Cancel',
+    '#href' => 'lightbox-cancel-add-photo/nojs',
+    '#ajax' => array(
+      'efect' => 'fade',
+    ),
+  );
+  }//if premission
+  else {
+    $form['form']['login'] = array(
+      '#markup' => '<p>Please Login...</p>
+                    To organize photos in lightboxes you must first register or login. Registration is Free!',
+    );
+  }
+  return $form;
+}
+
+/**
+ * Help function to validate "lightbox_album_add_image_form"
+ * Checks: 
+ *   1. if named lightbox already exists for current user
+ *   2. if specified image already exists into specified lightbox
+ * $args - $args['laid'], $args['pid']
+ */
+function lightbox_album_add_image_form_validate_help($args=array(), $lightbox_name='', &$err) {
+  //checks if named lightbox already exists for current user
+  if ($lightbox_name!='') {
+    global $user;
+    $res = db_select('node', 'n')
+    ->fields('n', array('nid'))
+    ->condition('type', LIGHTBOX_NODE_TYPE, '=')
+    ->condition('uid', $user->uid, '=')
+    ->condition('title', $lightbox_name, '=')
+    ->execute()
+    ->fetchAssoc();
+    if ( !empty($res) ) {
+      $err = t('Lightbox with given name already exists!');
+      return false;
+    }
+    return true;
+  }
+  
+  //checks if specified image already exists into specified lightbox
+  /*
+  SELECT * FROM field_data_field_product_id
+  JOIN field_data_field_lightbox_id ON field_data_field_product_id.entity_id=field_data_field_lightbox_id.entity_id
+  JOIN node ON node.nid=field_data_field_product_id.entity_id
+  WHERE node.uid=2
+  */
+  if ( count($args) > 0 ) {
+    $laid = $args['laid'];
+    $pid = $args['pid'];
+    global $user;
+    $qry = db_select('field_data_field_product_id', 'fpid');
+    $qry->fields('fpid', array('entity_id'));
+    $qry->join('field_data_field_lightbox_id', 'flid', 'fpid.entity_id=flid.entity_id');
+    $qry->join('node', 'n', 'fpid.entity_id=n.nid');
+    $qry->condition('fpid.field_product_id_nid', $pid, '=');
+    $qry->condition('flid.field_lightbox_id_nid', $laid, '=');
+    $qry->condition('n.uid', $user->uid, '=');
+    $res = $qry->execute()->fetchAssoc();
+    if ( !empty($res) ) {
+      $err = t('Photo is already into selected lightbox!');
+      return false;
+    }
+    return true;
+  }
+}
+
+/**
+ * Validation "lightbox_album_add_image_form".
+ */
+function lightbox_album_add_image_form_validate($form, &$form_state) {
+  $args = array();
+  $err = '';
+  if (!lightbox_album_add_image_form_validate_help($args, $form_state['values']['textfield'], $err) ) {
+    form_set_error('textfield', $err);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Callback for submit new lightbox ( "lightbox_album_add_image_form" )
+ */
+function lightbox_album_add_image_ajax_submit($form, &$form_state) {
+  $commands = array();
+  $msg = drupal_get_messages();
+  //$msg_status = key($msg);
+  //$msg_text = $msg[$msg_status][0];
+  $commands[] = ajax_command_replace('#lightbox-add-image-form', drupal_render($form['form']));
+  foreach($msg as $msg_status => $msg_text) {
+	$commands[] = ajax_command_invoke(NULL, "ajax_display_msg", array($msg_status, $msg_text[0]));
+  }
+  $commands[] = ajax_command_invoke(NULL, "ajax_hide_proba");
+  $commands[] = ajax_command_invoke(NULL, "ajax_refresh_lightbox_block", array(drupal_render(drupal_get_form('lightbox_album_delete_form'))));
+  //$commands[] = ajax_command_invoke(NULL, "ajax_display_proba");
+  ajax_deliver(array('#type' => 'ajax', '#commands' => $commands));
+  drupal_exit();
+}
+
+  /**
+   * Submit new lightbox ( "lightbox_album_add_image_form" )
+   */
+function lightbox_album_add_image_form_submit($form, &$form_state) {
+  //database work: save lightbox as "lightbox_type" node type
+  global $user;
+  $lightbox_name = $form_state['values']['textfield'];
+
+  if ( isset($lightbox_name) && !empty($lightbox_name) && $user->uid > 0 ) {
+    $lb_node = new stdClass();
+    $lb_node->type = LIGHTBOX_NODE_TYPE;
+    node_object_prepare($lb_node);
+
+    $lb_node->title = $lightbox_name;
+    $lb_node->language = LANGUAGE_NONE;
+
+    $lb_node->body[$node->language][0]['value']   = '';
+    $lb_node->body[$node->language][0]['summary'] = '';
+    $lb_node->body[$node->language][0]['format']  = 'filtered_html';
+
+    $path = 'lightbox_album/' .$user->uid .'/' .$lightbox_name;
+    $lb_node->path = array('alias' => $path);
+
+    $lb_node->uid = $user->uid;
+
+    node_save($lb_node);
+    
+    lightbox_album_save_image($lb_node->nid, $form_state['values']['pid']);
+    
+    drupal_set_message(t('Lightbox ' .$lightbox_name .' saved!'), 'status');
+  } else {
+    drupal_set_message(t('Your lightbox did NOT save!'), 'warning');
+  }
+}
+
+/**
+ * Callback for cancel button within "lightbox_album_add_image_form"
+ */
+function lightbox_album_add_image_cancel_callback($ajax) {
+  if ($ajax=='ajax') {
+    $commands[] = ajax_command_invoke(NULL, "ajax_display_msg", array('ok', 'Adding photo canceled!'));
+    $commands[] = ajax_command_invoke(NULL, "ajax_hide_proba");
+    ajax_deliver(array('#type' => 'ajax', '#commands' => $commands));
+    drupal_exit();
+  }
+  //TODO: nojs?
+}
+
+/**
+ * Get lightbox title for specifeid id
+ */
+function lightbox_album_get_title($laid) {
+  
+  $qry = db_select('node', 'n');
+  $qry->fields('n', array('title'));
+  $qry->condition('n.type', LIGHTBOX_NODE_TYPE, '=');
+  $qry->condition('n.nid', $laid, '=');
+  $res = $qry->execute()->fetchAssoc();
+  return $res['title'];
+}
+
+/**
+ * Get all user's lightboxes
+ */
+function lightbox_album_get_all() {
+  /*
+   SELECT node.title, node.nid
+   FROM field_data_field_lightbox_id
+   JOIN node ON node.nid = field_data_field_lightbox_id.field_lightbox_id_nid
+   WHERE node.uid =1
+   GROUP BY field_data_field_lightbox_id.field_lightbox_id_nid
+  */
+  global $user;
+  $qry = db_select('field_data_field_lightbox_id', 'flid');
+  $qry->join('node', 'n', 'flid.field_lightbox_id_nid=n.nid');
+  $qry->groupBy('flid.field_lightbox_id_nid');
+  $qry->fields('n', array('title', 'nid'));
+  $qry->condition('n.uid', $user->uid, '=');
+  
+  $res = $qry->execute();
+  return $res;
+}
+
+/**
+ * Create div id="lightboxes" and get all lightbox albums from db for display
+ */
+function lightbox_album_lightboxes($pid) {
+
+  $lightboxes = lightbox_album_get_all();
+
+  $lightbox_list = array();
+  
+  $lightbox_list = array(
+    '#prefix' => '<div id="lightboxes">',
+    '#suffix' => '</div><div id="msg"></div>',
+  );
+  
+  $lightbox_list['list'] =array();
+  
+  while ($lightbox = $lightboxes->fetchAssoc()) { 
+    $lightbox_list['list'][] = array (
+      '#type' => 'link',
+      '#title' => $lightbox['title'],
+      '#attributes' => array('class' => array('lightbox_links')),
+      '#href' => 'lightbox-add/nojs/' .$lightbox['nid'] .'/' .$pid,
+      '#ajax' => array(
+        'wrapper' => 'msg',
+        'effect' => 'fade',
+      ),
+    );
+  }
+  
+  return $lightbox_list;
+}
+
+/**
+ * Save added image data into db for current lightbox. 
+ */
+function lightbox_album_save_image($laid, $pid) {
+  //new photo node:
+  if ( isset($laid) && !empty($laid) && isset($pid) && !empty($pid) ) {
+    global $user;
+    $photo_node = new stdClass();
+    $photo_node->type = PHOTO_NODE_TYPE;
+    node_object_prepare($photo_node);
+    $photo_node->title = 'PHOTO'; //proizvoljno
+    $photo_node->language = LANGUAGE_NONE;
+    $photo_node->body[$node->language][0]['value']   = '';
+    $photo_node->body[$node->language][0]['summary'] = '';
+    $photo_node->body[$node->language][0]['format']  = 'filtered_html';
+    $photo_node->uid = $user->uid;
+    node_save($photo_node);
+      
+    //make lightbox reference to new node
+    $qry = db_insert('field_data_field_lightbox_id');
+    $qry->fields(array(
+        'entity_type' => 'node',
+        'bundle' => PHOTO_NODE_TYPE,
+        'deleted' => 0,
+        'entity_id' => $photo_node->nid,
+        'language' => LANGUAGE_NONE,
+        'delta' => 0,
+        'field_lightbox_id_nid' => $laid,
+    ))->execute();
+    
+    //make product reference to new node
+    $qry = db_insert('field_data_field_product_id');
+    $qry->fields(array(
+        'entity_type' => 'node',
+        'bundle' => PHOTO_NODE_TYPE,
+        'deleted' => 0,
+        'entity_id' => $photo_node->nid,
+        'language' => LANGUAGE_NONE,
+        'delta' => 0,
+        'field_product_id_nid' => $pid,
+    ))->execute();
+  }
+}
+
+/**
+ * Save specified image to specified lightbox
+ * @param $laid - lightbox id
+ * @param $fid - image fid
+ */
+function lightbox_album_save_image_callback($ajax, $laid, $pid) {
+  $err = '';
+  $args = array (
+    'laid' => $laid,
+    'pid' => $pid,
+  );
+  if ($ajax=='ajax') {
+    $commands = array();
+    if ( lightbox_album_add_image_form_validate_help($args, '', $err) ) {
+      lightbox_album_save_image($laid, $pid);
+      $commands[] = ajax_command_replace('#msg', '<div id="msg" class="ok">Photo saved!</div>');
+      $commands[] = ajax_command_invoke(NULL, "ajax_hide_proba");
+      $commands[] = ajax_command_invoke(NULL, "ajax_refresh_lightbox_block", array(drupal_render(drupal_get_form('lightbox_album_delete_form'))));
+      //radi kao return. vraca vrednost stranici sa koje je pozvan callback!
+      ajax_deliver(array('#type' => 'ajax', '#commands' => $commands));
+    }
+    else {
+      $commands[] = ajax_command_replace('#msg', '<div id="msg" class="my_error">' .$err .'</div>');
+      $commands[] = ajax_command_invoke(NULL, "ajax_hide_proba");
+      //$commands[] = ajax_command_invoke(NULL, "ajax_refresh_lightbox_block", array(drupal_render(drupal_get_form('lightbox_album_delete_form'))));
+      ajax_deliver(array('#type' => 'ajax', '#commands' => $commands));
+    }
+  }
+  else {
+    //TODO: nojs
+  }
+}
+
+/**
+ * Callback from link "lightbox-add-image/%" -> dipslay form "lightbox_album_add_image_form"
+ * within "#proba" div tag provided by "field--field_[field_name].tpl.php"
+ */
+function drupal_get_form_callback($ajax, $pid) {
+  $pid = array('pid' => $pid);
+  if ($ajax=='ajax') {
+    $commands = array();
+    $commands[] = ajax_command_replace('#proba', '<div id="proba">' . drupal_render(drupal_get_form('lightbox_album_add_image_form', $pid)) . '</div>');
+    $commands[] = ajax_command_invoke(NULL, "ajax_display_proba");
+    //radi kao return. vraca vrednost stranici sa koje je pozvan callback!
+    ajax_deliver(array('#type' => 'ajax', '#commands' => $commands));
+  }
+  else {
+    return drupal_get_form('lightbox_album_add_image_form', $pid);
+  }
+}
+
+/**
+ * Get representing(first) photo for specified lightbox. 
+ */
+function lightbox_album_get_rpr_photo($laid) {
+  /*
+   SELECT file_managed.filename FROM file_managed
+   JOIN field_data_field_slika ON file_managed.fid=field_data_field_slika.field_slika_fid
+   JOIN field_data_field_product_id ON field_data_field_slika.entity_id=field_data_field_product_id.field_product_id_nid
+   JOIN field_data_field_lightbox_id ON field_data_field_product_id.entity_id=field_data_field_lightbox_id.entity_id
+   WHERE field_data_field_lightbox_id.field_lightbox_id_nid=41
+   */
+  $qry = db_select('file_managed', 'fm');
+  $qry->join('field_data_field_slika', 'fdfs', 'fm.fid=fdfs.field_slika_fid');
+  $qry->join('field_data_field_product_id', 'fdfp', 'fdfs.entity_id=fdfp.field_product_id_nid');
+  $qry->join('field_data_field_lightbox_id', 'fdfl', 'fdfp.entity_id=fdfl.entity_id');
+  $qry->fields('fm', array('uri'));
+  $qry->condition('fdfl.field_lightbox_id_nid', $laid, '=');
+  $res = $qry->execute();
+  $first_photo = array();
+  if ( $res->rowCount() > 0 ) {
+    $first_photo = $res->fetchAssoc();
+  }
+  return $first_photo['uri'];
+}
+
+/**
+ * Get number of photos within specified lightbox.
+ */
+function lightbox_album_get_photo_no($laid) {
+  $qry = db_select('field_data_field_lightbox_id', 'flid');
+  $qry->fields('flid', array('entity_id'));
+  $qry->condition('flid.field_lightbox_id_nid', $laid, '=');
+  
+  $res = $qry->execute();
+  return $res->rowCount();
+}
+
+/**
+ * Callback to dispaly form "lightbox_album_delete_form"
+ */
+function lightbox_album_display_all_lightbox_callback($ajax) {
+  if ($ajax=='ajax') {
+    $commands[] = array();
+    $commands[] = ajax_command_replace('#display-all-lightbox', drupal_render(drupal_get_form('lightbox_album_delete_form')));
+    ajax_deliver(array('#type' => 'ajax', '#commands' => $commands));
+    //drupal_exit();
+  }
+  //TODO: nojs?
+}
+
+/**
+ * Form to delete lightbox.
+ */
+function lightbox_album_delete_form($form, &$form_state) {
+  /*ob_start();
+  print_r($form_state);
+  $var = ob_get_contents();
+  ob_end_clean();
+  $fp=fopen('form_state_original_form.txt','w');
+  fputs($fp,$var);
+  fclose($fp);*/
+    
+  if ( !isset($form_state['storage']['delete']) ) {
+    
+    $form = array(
+      '#prefix' => '<div id="display-all-lightbox"><div id="msg"></div>',
+      '#suffix' => '</div>',
+    );
+    $form['#attached']['css'] = array(
+      drupal_get_path('module', 'lightbox_album') . '/lightbox_album.css',
+    );
+    $lightboxes = lightbox_album_get_all(); //fields: 'nid', 'title'
+    $no_lightboxes = $lightboxes->rowCount(); 
+	if ( $no_lightboxes > 0) {
+	  while ( $lightbox = $lightboxes->fetchAssoc() ) {
+	    $form['container_' .$lightbox['title']] = array(
+	      '#type' => 'container',
+	      '#attributes' => array( 'class' => array('lightbox-display') ),
+	    );
+        $image = array(
+          'style_name' => 'thumbnail', // just enter the sytle name you'd like
+          'path' => lightbox_album_get_rpr_photo($lightbox['nid']),
+          //'width' => '',
+          //'height' => '',
+         'alt' => $lightbox['title'], // optional
+         'title' => $lightbox['title'],//$field_gallery[0]['title'], // optional
+        );
+        $form['container_' .$lightbox['title']]['image_' .$lightbox['title']] = array (
+          '#markup' => theme('image_style', $image),
+        );
+        $form['container_' .$lightbox['title']]['checkbox_' .$lightbox['nid']] = array(
+          '#type' => 'checkbox',
+          '#title' => '<a href="/lightbox/' .$lightbox['nid'] .'/' .$lightbox['title'] .'/photos">' .$lightbox['title'] .' (' .lightbox_album_get_photo_no($lightbox['nid']) .')</a>', //'<a href="/sadrzaj-lightbox/' .$lightbox['nid'] .'">' .$lightbox['title'] .' (' .lightbox_album_get_photo_no($lightbox['nid']) .')</a>', //link je VIEW
+        );
+	  }
+	  $form['container-last'] = array(
+	    '#markup' => '<div class="clear-left"></div>',	    
+	  );
+      $form['delete'] = array(
+        '#type' => 'submit',
+        '#value' => t('Delete'),
+        '#id' => 'lightbox-del-submit',
+        '#ajax' => array (
+          'callback' => 'lightbox_album_delete_ajax_submit',
+          'wrapper' => 'display-all-lightbox',
+          'method' => 'replace',
+          'efect' => 'fade',
+        ),
+      );
+    }
+    else {
+      $form['no_res'] = array (
+	    '#markup' => '<p>There is no lightbox yet.</p>',
+	  );
+    }	
+    return $form;
+  }
+  else {
+    //return "CHECK!";
+    return lightbox_album_delete_form_confirm($form_state);
+  }
+}
+
+/**
+ * Callback submit lightbox_album_delete_form.
+ */
+function lightbox_album_delete_ajax_submit($form, &$form_state) {
+  if ( isset($form_state['storage']['delete']) ) {
+    //hook_submit je uradio svoje
+    return drupal_render($form); //drupal_render(drupal_build_form('lightbox_album_delete_form_confirm', $form_state));
+  }
+  else {
+    $msg = drupal_get_messages();
+    $msg_status = key($msg);
+    $msg_text = $msg[$msg_status][0];
+    $commands = array();
+    /*foreach($msg as $msg_status => $msg_text) {
+      $commands[] = ajax_command_invoke(NULL, "ajax_display_msg", array($msg_status, $msg_text[0]));
+    }*/
+    $commands[] = ajax_command_replace('#display-all-lightbox', drupal_render(drupal_rebuild_form('lightbox_album_delete_form', $form_state)));
+    if ( $msg_status == 'status' ) {
+      $msg_text = '<div id="msg" class="ok">' .$msg_text .'</div>';
+    }
+    else {
+      $msg_text = '<div id="msg" class="my_error">' .$msg_text .'</div>';
+    }
+    $commands[] = ajax_command_replace("#msg", $msg_text);
+    ajax_deliver(array('#type' => 'ajax', '#commands' => $commands));
+    drupal_exit();
+  }
+}
+
+/**
+ * Confirm form to delete lightboxes.
+ */
+function lightbox_album_delete_form_confirm(&$form_state) {
+  
+  if ( isset($form_state['storage']['delete']) ) {
+    $lightbox_names = array();
+    $form = array (
+      '#prefix' => '<div id="display-all-lightbox"><div id="naslov">Following will be deleted:</div>',
+      '#sufix' => '</div>',
+    );
+    $form['lightboxes_nid'] = array();
+    foreach($form_state['storage']['delete_values'] as $state => $value) {
+     //checkbox checked
+     if ( $value==1 ) {
+       $nid = substr($state, strlen('checkbox_'), strlen($state)-strlen('checkbox_'));
+       $form['lightboxes_nid'][$nid] = array(
+  	   '#type' => 'hidden',
+  	   '#value' => $nid,
+  	 );
+  	 $lightbox_names[] = lightbox_album_get_title($nid);
+     }
+    }
+    for($i=0; $i<count($lightbox_names); $i++) {
+      $form['delete_'.$i] = array (
+  	  '#markup' => '<p class="lightbox_del">' .$lightbox_names[$i] .'</p>',
+  	);
+    }
+
+    $form['sure'] = array (
+      '#type' => 'submit',
+      '#value' => t('Sure'),
+      '#id' => 'lightbox-del-sure-submit',
+      '#ajax' => array (
+        'callback' => 'lightbox_album_delete_ajax_submit',
+        'wrapper' => 'display-all-lightbox',
+       // 'method' => 'replace',
+        'efect' => 'fade',
+      ), 
+    );
+    
+    $form['cancel'] = array (
+      '#type' => 'link',
+      '#title' => 'Cancel',
+      '#href' => 'lightboxes/nojs',
+      '#ajax' => array(
+        'wrapper' => 'display-all-lightbox',
+        'efect' => 'fade',
+      ),
+    );
+    return $form;
+  }
+}
+
+/**
+ * Submit delete lightbox form.
+ */
+
+function lightbox_album_delete_form_submit($form, &$form_state) {
+  if ($form_state['clicked_button']['#id'] == 'lightbox-del-submit') {
+    $form_state['rebuild'] = TRUE;
+    $form_state['storage']['delete'] = TRUE;
+    $form_state['storage']['delete_values'] = $form_state['values'];
+    $form_state['storage']['complete_form'] = $form_state['complete form']; 
+  }
+  if ( $form_state['clicked_button']['#id'] == 'lightbox-del-sure-submit' ){
+    unset($form_state['rebuild']);
+    unset($form_state['storage']);
+    foreach($form_state['values'] as $nid => $value) {
+	  if ( is_numeric($nid) && $nid==$value ) {
+	      node_delete($nid);
+      }
+    }
+    drupal_set_message(t('Lightbox(es) deleted!'), 'status');
+  }
+}
+
+/**
+ * Delete node reference to {field_data_field_product_id} and {field_revision_field_product_id}
+ */
+function lightbox_album_delete_product_ref($entity) {
+  $qry = db_delete('field_data_field_product_id');
+  $qry->condition('entity_id', $entity, '=');
+  $qry->execute();
+  
+  $qry = db_delete('field_revision_field_product_id');
+  $qry->condition('entity_id', $entity, '=');
+  $qry->execute();
+}
+
+/**
+ *  Delete node reference to {field_data_field_lightbox_id} and {field_revision_field_lightbox_id}
+ */
+function lightbox_album_delete_lightbox_ref($entity) {
+  $qry = db_delete('field_data_field_lightbox_id');
+  $qry->condition('entity_id', $entity, '=');
+  $qry->execute();
+  
+  $qry = db_delete('field_revision_field_lightbox_id');
+  $qry->condition('entity_id', $entity, '=');
+  $qry->execute();
+}
+
+/**
+ * Delete whole lightbox.
+ */
+function lightbox_album_node_delete($node) {
+  if ( $node->type==LIGHTBOX_NODE_TYPE ) { // || $node->type==PHOTO_NODE_TYPE) { 
+  // $nids = db_query('SELECT entity_id FROM {field_data_field_review_reference} WHERE field_review_reference_nid = :nid', array(':nid' => $node->nid))->fetchCol();
+  //node_delete_multiple($nids);
+  //1. delete field_data_field_product_id -> entity_id=lightbox.entity_id
+  //2. delete all photos -> nid = lightbox.entity_id
+  //3. delete field_data_field_lightbox_id
+  //4. delete lightbox
+    $qry = db_select('field_data_field_lightbox_id', 'flid');
+    $qry->fields('flid', array('entity_id'));
+    $qry->condition('flid.field_lightbox_id_nid', $node->nid, '=');
+    $res = $qry->execute();
+    while ( $lightbox = $res->fetchAssoc() ) {
+      //lightbox_album_delete_product_ref($lightbox['entity_id']);
+      //lightbox_album_delete_lightbox_ref($lightbox['entity_id']);
+      //$node_photo = node_load($lightbox['entity_id']);
+      node_delete($node_photo->nid);
+      //node_delete($lightbox['entity_id']);
+    }
+  }//if
+  
+  if ( $node->type==PHOTO_NODE_TYPE ) {
+    lightbox_album_delete_product_ref($node->nid);
+    lightbox_album_delete_lightbox_ref($node->nid);
+    //node_delete($node->nid);
+  }
+}
+
+/**
+ * Delete single photo or multiple photos from lightbox.
+ */
+function lightbox_album_delete_multiple_photo($photo_nids, $laid) {
+  if ( is_array($photo_nids) ) {
+    for($i=0; $i<count($photo_nids); $i++) {
+      //$photo_node = node_load($photo_nids[$i]);
+      //lightbox_album_node_delete($photo_node);
+      node_delete($photo_nids[$i]);
+    }
+  }
+  else {
+    //$photo_node = node_load($photo_nids);
+    //lightbox_album_node_delete($photo_node);
+    node_delete($photo_nids);
+  }
+  //check empty of lightbox
+  $qry = db_select('field_data_field_lightbox_id', 'fdfl');
+  $qry->fields('fdfl', array('entity_id'));
+  $qry->condition('fdfl.field_lightbox_id_nid', $laid, '=');
+  $res = $qry->execute();
+  if ( $res->rowCount() == 0 ) {
+    node_delete($laid);
+  }
+}
+
+/**
+ * Display all photos for one lightbox.
+ */
+function lightbox_album_display_all_photos_form($form, &$form_state, $laid) {
+  if ( !isset($form_state['values']) || $form_state['values']['op']!=t('Delete') ) {
+    $form = array();
+    $qry = db_select('file_managed', 'fm');
+    $qry->join('field_data_field_slika', 'fdfs', 'fm.fid=fdfs.field_slika_fid');
+    $qry->join('field_data_field_product_id', 'fdfp', 'fdfs.entity_id=fdfp.field_product_id_nid');
+    $qry->join('field_data_field_lightbox_id', 'fdfl', 'fdfp.entity_id=fdfl.entity_id');
+    $qry->join('node', 'n', 'fdfp.field_product_id_nid=n.nid');
+    $qry->fields('fm', array('uri', 'filename'));
+    $qry->fields('fdfl', array('entity_id'));
+    $qry->fields('n', array('title', 'nid'));
+    $qry->condition('fdfl.field_lightbox_id_nid', $laid, '=');
+    $res = $qry->execute();
+    if ( $res->rowCount() > 0 ) {
+      while ( $photo = $res->fetchAssoc()) {
+        $form['container_' .$photo['title']] = array(
+	      '#type' => 'container',
+	      '#attributes' => array( 'class' => array('lightbox-display') ),
+	    );
+        $image = array(
+          'style_name' => 'thumbnail', // just enter the sytle name you'd like
+          'path' => $photo['uri'],
+          //'width' => '',
+          //'height' => '',
+          'alt' => $photo['filename'], // optional
+          'title' => $photo['filename'],//$field_gallery[0]['title'], // optional
+        );
+        $form['container_' .$photo['title']]['image_' .$photo['entity_id']] = array (
+          '#markup' => '<a href="' .base_path() .'node/' .$photo['nid'] .'">' .theme('image_style', $image) .'</a>',
+        );
+        $form['container_' .$photo['title']]['checkbox_' .$photo['entity_id']] = array (
+          '#type' => 'checkbox',
+          '#title' => l($photo['title'], 'node/' .$photo['nid']),
+          '#default_value' => 0,
+        );
+      }
+      $form['container-last'] = array(
+        '#markup' => '<div class="clear-left"></div>',
+      );
+      $form['lightbox_laid'] = array (
+        '#type' => 'hidden',
+        '#value' => $laid,
+      );
+      $form['submit'] = array (
+        '#type' => 'submit',
+        '#value' => t('Delete'),
+      );
+    }
+    else {
+      $form['no_res'] = array (
+          '#markup' => '<p>There is no lightbox.</p>',
+      );
+    }
+    return $form;
+  }
+  else {
+    return lightbox_album_display_photos_form_confirm($form_state);
+  }
+}
+
+/**
+ * Callback to display all photos within one lightbox
+ * @param int $laid - lightbox nid (id)
+ * @param string $title - lightbox title
+ */
+function lightbox_album_display_all_photo_callback($laid, $title) {
+  drupal_set_title($title .' photos');
+  return drupal_get_form('lightbox_album_display_all_photos_form', $laid);
+}
+
+/**
+ * 
+ * @param $form_state
+ */
+function lightbox_album_display_photos_form_confirm(&$form_state) {
+  
+  $form['photos_nid'] = array();
+  
+  foreach($form_state['values'] as $state => $value) {
+    //checkbox checked
+    if ( $value==1 ) {
+      $nid = substr($state, strlen('checkbox_'), strlen($state)-strlen('checkbox_'));
+      $form['photos_nid'][$nid] = array(
+	      '#type' => 'hidden',
+	      '#value' => $nid,
+	    );
+    }
+  }
+  $form['lightbox_nid'] = array (
+    '#type' => 'hidden',
+    '#value' => $form_state['values']['lightbox_laid'],
+  );
+  
+  return confirm_form(
+      $form,
+      'Are you sure you want to delete?',
+      'lightbox/' .$form_state['values']['lightbox_laid'] .'/' .lightbox_album_get_title($form_state['values']['lightbox_laid']) .'/photos', //lightbox/%/%/photos
+      t('This action cannot be undone.'),
+      t('Sure'),
+      t('Cancel'));
+}
+
+function lightbox_album_display_all_photos_form_submit($form, &$form_state) {
+  if ( $form_state['values']['op']==t('Delete') ) {
+    $form_state['rebuild'] = TRUE;
+  }
+  elseif ( $form_state['values']['op']==t('Sure') ) {
+    //"Sure" clicked!!!
+    foreach($form_state['complete form']['photos_nid'] as $nid => $value) {
+      if ( is_numeric($nid) ) {
+        $photo_nids[] = $nid;
+      }
+    }
+    lightbox_album_delete_multiple_photo($photo_nids, $form_state['values']['lightbox_nid']);
+    drupal_set_message(t('Photo(s) deleted!'), 'status');
+  }  
+}
+

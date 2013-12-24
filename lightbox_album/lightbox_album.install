@@ -1,0 +1,10 @@
+<?php
+
+/**
+ * Implements hook_uninstall().
+ */
+function lightbox_album_uninstall() {
+  if ( variable_get('lightbox_node_type', '') != '' ) {
+    variable_del('lightbox_node_type');
+  }
+} 
